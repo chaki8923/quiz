@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
-import { Session, QuizWithChoices, Choice, RealtimeAnswer, RealtimeSessionUpdate } from "@/types";
+import { Session, QuizWithChoices, Choice } from "@/types";
 import { Button } from "@/components/ui/Button";
 import { CHOICE_LABELS } from "@/lib/utils";
 import { Users, CheckCircle, Clock, BookOpen } from "lucide-react";
@@ -15,10 +15,12 @@ interface QuizSessionProps {
 }
 
 type AnswerMap = Record<string, { participantName: string; choiceId: string }[]>;
+type Participant = { id: string; name: string };
 
 export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps) {
   const router = useRouter();
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
+  const sessionId = session.id;
 
   const [participantId, setParticipantId] = useState<string | null>(null);
   const [participantName, setParticipantName] = useState<string>("");
@@ -28,9 +30,18 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [answers, setAnswers] = useState<AnswerMap>({});
-  const [participants, setParticipants] = useState<{ id: string; name: string }[]>([]);
+  const [participants, setParticipants] = useState<Participant[]>([]);
+  const [connected, setConnected] = useState(false);
 
-  const sessionId = session.id;
+  // stale closure 対策: refで最新値を保持
+  const participantsRef = useRef<Participant[]>([]);
+  const currentIndexRef = useRef(currentIndex);
+  const participantIdRef = useRef<string | null>(null);
+
+  useEffect(() => { participantsRef.current = participants; }, [participants]);
+  useEffect(() => { currentIndexRef.current = currentIndex; }, [currentIndex]);
+  useEffect(() => { participantIdRef.current = participantId; }, [participantId]);
+
   const currentQuiz: QuizWithChoices | undefined = quizzes[currentIndex];
 
   // 参加者情報をセッションストレージから取得
@@ -54,7 +65,7 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
     if (data) setParticipants(data);
   }, [supabase, sessionId]);
 
-  // 現在の問題の回答状況を取得
+  // 指定問題の回答状況を取得
   const fetchAnswers = useCallback(async (quizId: string) => {
     const { data } = await supabase
       .from("answers")
@@ -62,74 +73,34 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
       .eq("session_id", sessionId)
       .eq("quiz_id", quizId);
 
-    if (data) {
-      const map: AnswerMap = {};
-      data.forEach((a) => {
-        if (!map[a.choice_id]) map[a.choice_id] = [];
-        map[a.choice_id].push({
-          participantName: (a as unknown as { participants: { name: string } }).participants?.name ?? "",
-          choiceId: a.choice_id,
-        });
-      });
-      setAnswers(map);
+    if (!data) return;
 
-      // 自分の回答済み確認
-      if (participantId) {
-        const myAnswer = data.find((a) => a.participant_id === participantId);
-        if (myAnswer) {
-          setSelectedChoiceId(myAnswer.choice_id);
-          setSubmitted(true);
-        }
+    const map: AnswerMap = {};
+    data.forEach((a) => {
+      if (!map[a.choice_id]) map[a.choice_id] = [];
+      map[a.choice_id].push({
+        participantName: (a as unknown as { participants: { name: string } }).participants?.name ?? "",
+        choiceId: a.choice_id,
+      });
+    });
+    setAnswers(map);
+
+    // 自分が既に回答済みか確認
+    const pid = participantIdRef.current;
+    if (pid) {
+      const myAnswer = data.find((a) => a.participant_id === pid);
+      if (myAnswer) {
+        setSelectedChoiceId(myAnswer.choice_id);
+        setSubmitted(true);
       }
     }
-  }, [supabase, sessionId, participantId]);
+  }, [supabase, sessionId]);
 
+  // 初期データ取得
   useEffect(() => {
     fetchParticipants();
-    if (currentQuiz) fetchAnswers(currentQuiz.id);
-  }, [fetchParticipants, fetchAnswers, currentQuiz]);
+  }, [fetchParticipants]);
 
-  // Realtime subscription
-  useEffect(() => {
-    const channel = supabase
-      .channel(`session:${sessionId}`)
-      .on("broadcast", { event: "answer" }, ({ payload }: { payload: RealtimeAnswer }) => {
-        setAnswers((prev) => {
-          const updated = { ...prev };
-          if (!updated[payload.choice_id]) updated[payload.choice_id] = [];
-          const existing = updated[payload.choice_id].find(
-            (a) => a.participantName === payload.participant_name
-          );
-          if (!existing) {
-            updated[payload.choice_id] = [
-              ...updated[payload.choice_id],
-              { participantName: payload.participant_name, choiceId: payload.choice_id },
-            ];
-          }
-          return updated;
-        });
-      })
-      .on("broadcast", { event: "session_update" }, ({ payload }: { payload: RealtimeSessionUpdate }) => {
-        setSessionStatus(payload.status);
-        setCurrentIndex(payload.current_quiz_index);
-        setSelectedChoiceId(null);
-        setSubmitted(false);
-        setAnswers({});
-        if (payload.status === "completed") {
-          router.push(`/sessions/${sessionId}/result`);
-        }
-      })
-      .on("broadcast", { event: "participant_join" }, () => {
-        fetchParticipants();
-      })
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [sessionId, supabase, router, fetchParticipants]);
-
-  // 問題が変わったら回答状況を再取得
   useEffect(() => {
     if (currentQuiz) {
       setAnswers({});
@@ -139,9 +110,85 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
     }
   }, [currentIndex, currentQuiz, fetchAnswers]);
 
+  // Postgres Changes でリアルタイム更新
+  useEffect(() => {
+    const channel = supabase
+      .channel(`realtime:session:${sessionId}`)
+      // 新しい参加者が参加したとき
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "participants", filter: `session_id=eq.${sessionId}` },
+        (payload) => {
+          const p = payload.new as Participant;
+          setParticipants((prev) => {
+            if (prev.some((x) => x.id === p.id)) return prev;
+            return [...prev, { id: p.id, name: p.name }];
+          });
+        }
+      )
+      // 回答が送信されたとき
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "answers", filter: `session_id=eq.${sessionId}` },
+        (payload) => {
+          const a = payload.new as { participant_id: string; choice_id: string; quiz_id: string; session_id: string };
+          // 現在表示中の問題の回答のみ処理
+          const currentQ = quizzes[currentIndexRef.current];
+          if (!currentQ || a.quiz_id !== currentQ.id) return;
+
+          const participant = participantsRef.current.find((p) => p.id === a.participant_id);
+          if (!participant) return;
+
+          setAnswers((prev) => {
+            const updated = { ...prev };
+            if (!updated[a.choice_id]) updated[a.choice_id] = [];
+            if (updated[a.choice_id].some((x) => x.participantName === participant.name)) return prev;
+            updated[a.choice_id] = [...updated[a.choice_id], { participantName: participant.name, choiceId: a.choice_id }];
+            return updated;
+          });
+        }
+      )
+      // セッション状態が変わったとき（ホストが次の問題・終了操作）
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "sessions", filter: `id=eq.${sessionId}` },
+        (payload) => {
+          const s = payload.new as { status: string; current_quiz_index: number };
+          const newStatus = s.status as Session["status"];
+          const newIndex = s.current_quiz_index;
+
+          setSessionStatus(newStatus);
+
+          if (newIndex !== currentIndexRef.current) {
+            setCurrentIndex(newIndex);
+            setAnswers({});
+            setSelectedChoiceId(null);
+            setSubmitted(false);
+          }
+
+          if (newStatus === "completed") {
+            router.push(`/sessions/${sessionId}/result`);
+          }
+        }
+      )
+      .subscribe((status) => {
+        setConnected(status === "SUBSCRIBED");
+        // 接続完了後に最新データを再取得して同期
+        if (status === "SUBSCRIBED") {
+          fetchParticipants();
+          if (quizzes[currentIndexRef.current]) {
+            fetchAnswers(quizzes[currentIndexRef.current].id);
+          }
+        }
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [sessionId, supabase, router, quizzes, fetchParticipants, fetchAnswers]);
+
   const handleSubmitAnswer = async () => {
     if (!selectedChoiceId || !participantId || !currentQuiz || submitted) return;
-
     setSubmitting(true);
 
     const { error } = await supabase.from("answers").upsert({
@@ -151,21 +198,7 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
       session_id: sessionId,
     });
 
-    if (!error) {
-      // Realtimeでブロードキャスト
-      await supabase.channel(`session:${sessionId}`).send({
-        type: "broadcast",
-        event: "answer",
-        payload: {
-          participant_id: participantId,
-          participant_name: participantName,
-          quiz_id: currentQuiz.id,
-          choice_id: selectedChoiceId,
-        } satisfies RealtimeAnswer,
-      });
-      setSubmitted(true);
-    }
-
+    if (!error) setSubmitted(true);
     setSubmitting(false);
   };
 
@@ -219,7 +252,6 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
             </div>
           </div>
         </div>
-        {/* Progress bar */}
         <div className="h-1 bg-gray-100">
           <div
             className="h-full bg-brand-500 transition-all duration-500"
@@ -229,7 +261,6 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
       </div>
 
       <main className="mx-auto max-w-3xl px-4 py-8">
-        {/* 参加者名 */}
         <div className="mb-4 flex items-center gap-1.5 text-sm text-gray-500">
           <Users size={14} />
           <span>{participantName} さんとして参加中</span>
@@ -285,15 +316,13 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
                   >
                     {CHOICE_LABELS[ci]}
                   </span>
-                  <span className="flex-1 font-medium text-gray-900">
-                    {choice.text}
-                  </span>
+                  <span className="flex-1 font-medium text-gray-900">{choice.text}</span>
                   {submitted && isCorrect && (
                     <CheckCircle size={20} className="flex-shrink-0 text-green-500" />
                   )}
                 </div>
 
-                {/* 回答者リスト */}
+                {/* リアルタイム回答者タグ */}
                 {choiceAnswers.length > 0 && (
                   <div className="mt-2 ml-11 flex flex-wrap gap-1">
                     {choiceAnswers.map((a, i) => (
@@ -311,7 +340,6 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
                   </div>
                 )}
 
-                {/* 補足説明 */}
                 {submitted && isCorrect && choice.explanation && (
                   <div className="mt-2 ml-11 rounded-lg bg-green-100 px-3 py-2 text-sm text-green-800">
                     💡 {choice.explanation}
@@ -339,13 +367,11 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
               <CheckCircle size={20} />
               <span className="font-medium">回答済み</span>
             </div>
-            <p className="mt-1 text-sm text-brand-600">
-              全員の回答を待っています...
-            </p>
+            <p className="mt-1 text-sm text-brand-600">全員の回答を待っています...</p>
           </div>
         )}
 
-        {/* 参加者全体の回答状況 */}
+        {/* 回答状況パネル */}
         <div className="mt-6 rounded-xl border border-gray-200 bg-white p-4">
           <div className="flex items-center gap-2 mb-3">
             <Clock size={16} className="text-gray-400" />
@@ -361,13 +387,13 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
               return (
                 <span
                   key={p.id}
-                  className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${
+                  className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${
                     hasAnswered
                       ? "bg-green-100 text-green-700"
                       : "bg-gray-100 text-gray-500"
                   }`}
                 >
-                  {hasAnswered ? "✓ " : "…"}
+                  {hasAnswered ? "✓ " : "… "}
                   {p.name}
                 </span>
               );
@@ -385,7 +411,7 @@ function WaitingScreen({
   participantName,
 }: {
   categoryName: string;
-  participants: { id: string; name: string }[];
+  participants: Participant[];
   participantName: string;
 }) {
   return (

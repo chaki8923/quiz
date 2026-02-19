@@ -53,17 +53,6 @@ export type Answer = {
   choice?: Choice;
 };
 
-export type RealtimeAnswer = {
-  participant_id: string;
-  participant_name: string;
-  quiz_id: string;
-  choice_id: string;
-};
-
-export type RealtimeSessionUpdate = {
-  status: Session["status"];
-  current_quiz_index: number;
-};
 
 export type QuizWithChoices = Quiz & {
   choices: Choice[];

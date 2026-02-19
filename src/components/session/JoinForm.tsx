@@ -16,7 +16,6 @@ export function JoinForm({ sessionId }: JoinFormProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const router = useRouter();
-  const supabase = createClient();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -41,17 +40,11 @@ export function JoinForm({ sessionId }: JoinFormProps) {
       return;
     }
 
-    // participant_id をセッションストレージに保存
+    // セッションストレージに参加者情報を保存
     sessionStorage.setItem(`participant_${sessionId}`, participant.id);
     sessionStorage.setItem(`participant_name_${sessionId}`, participant.name);
 
-    // ホストと他の参加者に参加を通知
-    await supabase.channel(`session:${sessionId}`).send({
-      type: "broadcast",
-      event: "participant_join",
-      payload: { participant_id: participant.id, name: participant.name },
-    });
-
+    // DBへのINSERTがSupabase Postgres Changesでホスト・他参加者に自動通知される
     router.push(`/sessions/${sessionId}`);
   };
 
