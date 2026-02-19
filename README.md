@@ -50,3 +50,4 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 | `/sessions/[id]` | クイズ回答（参加者） |
 | `/sessions/[id]/host` | ホスト操作画面 |
 | `/sessions/[id]/result` | 結果表示 |
+# quiz
