@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { QuizList } from "@/components/admin/QuizList";
 import { CreateQuizButton } from "@/components/admin/CreateQuizButton";
+import { ImportQuizButton } from "@/components/admin/ImportQuizButton";
 import { ChevronLeft, BookOpen } from "lucide-react";
 
 interface PageProps {
@@ -51,7 +52,10 @@ export default async function CategoryDetailPage({ params }: PageProps) {
             <p className="text-sm text-gray-500">{category.description}</p>
           )}
         </div>
-        <CreateQuizButton categoryId={id} quizCount={quizzes?.length ?? 0} />
+        <div className="flex gap-2">
+          <ImportQuizButton categoryId={id} quizCount={quizzes?.length ?? 0} />
+          <CreateQuizButton categoryId={id} quizCount={quizzes?.length ?? 0} />
+        </div>
       </div>
 
       {quizzes && quizzes.length > 0 ? (
