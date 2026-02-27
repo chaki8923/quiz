@@ -32,6 +32,7 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
   const [answers, setAnswers] = useState<AnswerMap>({});
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [connected, setConnected] = useState(false);
+  const [answerRevealed, setAnswerRevealed] = useState(false);
 
   // stale closure 対策: refで最新値を保持
   const participantsRef = useRef<Participant[]>([]);
@@ -106,6 +107,7 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
       setAnswers({});
       setSelectedChoiceId(null);
       setSubmitted(false);
+      setAnswerRevealed(false);
       fetchAnswers(currentQuiz.id);
     }
   }, [currentIndex, currentQuiz, fetchAnswers]);
@@ -164,6 +166,7 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
             setAnswers({});
             setSelectedChoiceId(null);
             setSubmitted(false);
+            setAnswerRevealed(false);
           }
 
           if (newStatus === "completed") {
@@ -186,6 +189,19 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
       supabase.removeChannel(channel);
     };
   }, [sessionId, supabase, router, quizzes, fetchParticipants, fetchAnswers]);
+
+  // ホストの「正解を表示する」を Broadcast で受信
+  useEffect(() => {
+    const channel = supabase
+      .channel(`broadcast:session:${sessionId}`)
+      .on("broadcast", { event: "answer_revealed" }, () => {
+        setAnswerRevealed(true);
+      })
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [sessionId, supabase]);
 
   const handleSubmitAnswer = async () => {
     if (!selectedChoiceId || !participantId || !currentQuiz || submitted) return;
@@ -286,10 +302,10 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
             return (
               <button
                 key={choice.id}
-                onClick={() => !submitted && setSelectedChoiceId(choice.id)}
-                disabled={submitted}
+                onClick={() => !submitted && !answerRevealed && setSelectedChoiceId(choice.id)}
+                disabled={submitted || answerRevealed}
                 className={`w-full rounded-xl border-2 p-4 text-left transition-all ${
-                  submitted
+                  submitted || answerRevealed
                     ? isCorrect
                       ? "border-green-400 bg-green-50"
                       : isSelected
@@ -303,7 +319,7 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
                 <div className="flex items-center gap-3">
                   <span
                     className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-sm font-bold ${
-                      submitted
+                      submitted || answerRevealed
                         ? isCorrect
                           ? "bg-green-500 text-white"
                           : isSelected
@@ -317,7 +333,7 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
                     {CHOICE_LABELS[ci]}
                   </span>
                   <span className="flex-1 font-medium text-gray-900">{choice.text}</span>
-                  {submitted && isCorrect && (
+                  {(submitted || answerRevealed) && isCorrect && (
                     <CheckCircle size={20} className="flex-shrink-0 text-green-500" />
                   )}
                 </div>
@@ -340,9 +356,16 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
                   </div>
                 )}
 
-                {submitted && isCorrect && choice.explanation && (
+                {/* 正解の解説 */}
+                {(submitted || answerRevealed) && isCorrect && choice.explanation && (
                   <div className="mt-2 ml-11 rounded-lg bg-green-100 px-3 py-2 text-sm text-green-800">
                     💡 {choice.explanation}
+                  </div>
+                )}
+                {/* 不正解の解説（ホストが正解を表示したとき） */}
+                {answerRevealed && !isCorrect && choice.explanation && (
+                  <div className="mt-2 ml-11 rounded-lg bg-gray-100 px-3 py-2 text-sm text-gray-600">
+                    ✗ {choice.explanation}
                   </div>
                 )}
               </button>
@@ -351,7 +374,7 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
         </div>
 
         {/* 回答ボタン */}
-        {!submitted ? (
+        {!submitted && !answerRevealed ? (
           <Button
             onClick={handleSubmitAnswer}
             disabled={!selectedChoiceId}
@@ -361,6 +384,14 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
           >
             回答を送信する
           </Button>
+        ) : answerRevealed ? (
+          <div className="rounded-xl border border-yellow-200 bg-yellow-50 p-4 text-center">
+            <div className="flex items-center justify-center gap-2 text-yellow-700">
+              <CheckCircle size={20} />
+              <span className="font-medium">正解が発表されました</span>
+            </div>
+            <p className="mt-1 text-sm text-yellow-600">次の問題をお待ちください...</p>
+          </div>
         ) : (
           <div className="rounded-xl border border-brand-200 bg-brand-50 p-4 text-center">
             <div className="flex items-center justify-center gap-2 text-brand-700">

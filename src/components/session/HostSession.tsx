@@ -44,6 +44,7 @@ export function HostSession({ session, quizzes, categoryName }: HostSessionProps
   // stale closure 対策
   const participantsRef = useRef<Participant[]>([]);
   const currentIndexRef = useRef(currentIndex);
+  const broadcastChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   useEffect(() => { participantsRef.current = participants; }, [participants]);
   useEffect(() => { currentIndexRef.current = currentIndex; }, [currentIndex]);
@@ -92,6 +93,16 @@ export function HostSession({ session, quizzes, categoryName }: HostSessionProps
       fetchAnswers(currentQuiz.id);
     }
   }, [currentIndex, currentQuiz, fetchAnswers]);
+
+  // 参加者への Broadcast チャンネル
+  useEffect(() => {
+    const channel = supabase.channel(`broadcast:session:${sessionId}`);
+    channel.subscribe();
+    broadcastChannelRef.current = channel;
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [sessionId, supabase]);
 
   // Postgres Changes でリアルタイム更新
   useEffect(() => {
@@ -430,7 +441,14 @@ export function HostSession({ session, quizzes, categoryName }: HostSessionProps
         <div className="flex gap-3">
           {!showResult ? (
             <Button
-              onClick={() => setShowResult(true)}
+              onClick={() => {
+                setShowResult(true);
+                broadcastChannelRef.current?.send({
+                  type: "broadcast",
+                  event: "answer_revealed",
+                  payload: {},
+                });
+              }}
               size="lg"
               className="flex-1 bg-yellow-500 hover:bg-yellow-400 text-gray-900"
             >
