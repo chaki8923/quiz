@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { Session, QuizWithChoices, Choice } from "@/types";
 import { Button } from "@/components/ui/Button";
 import { CHOICE_LABELS } from "@/lib/utils";
-import { Users, CheckCircle, Clock, BookOpen } from "lucide-react";
+import { Users, CheckCircle, Clock, BookOpen, Timer } from "lucide-react";
 
 interface QuizSessionProps {
   session: Session;
@@ -33,6 +33,7 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [connected, setConnected] = useState(false);
   const [answerRevealed, setAnswerRevealed] = useState(false);
+  const [timeLeft, setTimeLeft] = useState<number | null>(null);
 
   // stale closure 対策: refで最新値を保持
   const participantsRef = useRef<Participant[]>([]);
@@ -108,6 +109,7 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
       setSelectedChoiceId(null);
       setSubmitted(false);
       setAnswerRevealed(false);
+      setTimeLeft(null);
       fetchAnswers(currentQuiz.id);
     }
   }, [currentIndex, currentQuiz, fetchAnswers]);
@@ -167,6 +169,7 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
             setSelectedChoiceId(null);
             setSubmitted(false);
             setAnswerRevealed(false);
+            setTimeLeft(null);
           }
 
           if (newStatus === "completed") {
@@ -190,18 +193,31 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
     };
   }, [sessionId, supabase, router, quizzes, fetchParticipants, fetchAnswers]);
 
-  // ホストの「正解を表示する」を Broadcast で受信
+  // ホストの「正解を表示する」「問題開始」を Broadcast で受信
   useEffect(() => {
     const channel = supabase
       .channel(`broadcast:session:${sessionId}`)
+      .on("broadcast", { event: "question_start" }, (event) => {
+        const { timeLimitSeconds } = event.payload as { timeLimitSeconds: number };
+        setAnswerRevealed(false);
+        setTimeLeft(timeLimitSeconds > 0 ? timeLimitSeconds : null);
+      })
       .on("broadcast", { event: "answer_revealed" }, () => {
         setAnswerRevealed(true);
+        setTimeLeft(null);
       })
       .subscribe();
     return () => {
       supabase.removeChannel(channel);
     };
   }, [sessionId, supabase]);
+
+  // 参加者側カウントダウン
+  useEffect(() => {
+    if (timeLeft === null || timeLeft <= 0 || submitted) return;
+    const t = setTimeout(() => setTimeLeft((n) => (n !== null ? n - 1 : null)), 1000);
+    return () => clearTimeout(t);
+  }, [timeLeft, submitted]);
 
   const handleSubmitAnswer = async () => {
     if (!selectedChoiceId || !participantId || !currentQuiz || submitted) return;
@@ -259,6 +275,14 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
             {categoryName}
           </div>
           <div className="flex items-center gap-3">
+            {timeLeft !== null && !answerRevealed && (
+              <div className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold ${
+                timeLeft <= 5 ? "bg-red-100 text-red-600 animate-pulse" : "bg-brand-100 text-brand-700"
+              }`}>
+                <Timer size={12} />
+                {timeLeft}秒
+              </div>
+            )}
             <span className="text-xs text-gray-500">
               問題 {currentIndex + 1} / {quizzes.length}
             </span>
@@ -302,8 +326,8 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
             return (
               <button
                 key={choice.id}
-                onClick={() => !submitted && !answerRevealed && setSelectedChoiceId(choice.id)}
-                disabled={submitted || answerRevealed}
+                onClick={() => !submitted && !answerRevealed && timeLeft !== 0 && setSelectedChoiceId(choice.id)}
+                disabled={submitted || answerRevealed || timeLeft === 0}
                 className={`w-full rounded-xl border-2 p-4 text-left transition-all ${
                   submitted || answerRevealed
                     ? isCorrect
@@ -338,8 +362,8 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
                   )}
                 </div>
 
-                {/* リアルタイム回答者タグ */}
-                {choiceAnswers.length > 0 && (
+                {/* 正解表示後のみ回答者名を表示 */}
+                {answerRevealed && choiceAnswers.length > 0 && (
                   <div className="mt-2 ml-11 flex flex-wrap gap-1">
                     {choiceAnswers.map((a, i) => (
                       <span
@@ -374,7 +398,7 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
         </div>
 
         {/* 回答ボタン */}
-        {!submitted && !answerRevealed ? (
+        {!submitted && !answerRevealed && timeLeft !== 0 ? (
           <Button
             onClick={handleSubmitAnswer}
             disabled={!selectedChoiceId}
@@ -384,6 +408,14 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
           >
             回答を送信する
           </Button>
+        ) : !submitted && timeLeft === 0 && !answerRevealed ? (
+          <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-center">
+            <div className="flex items-center justify-center gap-2 text-red-700">
+              <Timer size={20} />
+              <span className="font-medium">時間切れ</span>
+            </div>
+            <p className="mt-1 text-sm text-red-500">回答の受付が終了しました</p>
+          </div>
         ) : answerRevealed ? (
           <div className="rounded-xl border border-yellow-200 bg-yellow-50 p-4 text-center">
             <div className="flex items-center justify-center gap-2 text-yellow-700">

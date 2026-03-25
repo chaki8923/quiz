@@ -16,6 +16,7 @@ import {
   Copy,
   BookOpen,
   Wifi,
+  Timer,
 } from "lucide-react";
 
 interface HostSessionProps {
@@ -40,6 +41,8 @@ export function HostSession({ session, quizzes, categoryName }: HostSessionProps
   const [copied, setCopied] = useState(false);
   const [showResult, setShowResult] = useState(false);
   const [connected, setConnected] = useState(false);
+  const [timeLimitSeconds, setTimeLimitSeconds] = useState(0);
+  const [hostTimeLeft, setHostTimeLeft] = useState<number | null>(null);
 
   // stale closure 対策
   const participantsRef = useRef<Participant[]>([]);
@@ -103,6 +106,17 @@ export function HostSession({ session, quizzes, categoryName }: HostSessionProps
       supabase.removeChannel(channel);
     };
   }, [sessionId, supabase]);
+
+  const startTimer = useCallback(() => {
+    setHostTimeLeft(timeLimitSeconds > 0 ? timeLimitSeconds : null);
+  }, [timeLimitSeconds]);
+
+  // ホスト側カウントダウン
+  useEffect(() => {
+    if (hostTimeLeft === null || hostTimeLeft <= 0 || showResult) return;
+    const t = setTimeout(() => setHostTimeLeft((n) => (n !== null ? n - 1 : null)), 1000);
+    return () => clearTimeout(t);
+  }, [hostTimeLeft, showResult]);
 
   // Postgres Changes でリアルタイム更新
   useEffect(() => {
@@ -175,6 +189,12 @@ export function HostSession({ session, quizzes, categoryName }: HostSessionProps
     setCurrentIndex(0);
     setAnswers({});
     setShowResult(false);
+    broadcastChannelRef.current?.send({
+      type: "broadcast",
+      event: "question_start",
+      payload: { timeLimitSeconds },
+    });
+    startTimer();
     setLoading(false);
   };
 
@@ -196,6 +216,12 @@ export function HostSession({ session, quizzes, categoryName }: HostSessionProps
       setCurrentIndex(nextIndex);
       setAnswers({});
       setShowResult(false);
+      broadcastChannelRef.current?.send({
+        type: "broadcast",
+        event: "question_start",
+        payload: { timeLimitSeconds },
+      });
+      startTimer();
     }
     setLoading(false);
   };
@@ -275,6 +301,34 @@ export function HostSession({ session, quizzes, categoryName }: HostSessionProps
             )}
           </div>
 
+          {/* 制限時間設定 */}
+          <div className="mb-6 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
+            <div className="mb-3 flex items-center gap-2">
+              <Timer size={18} className="text-brand-600" />
+              <h2 className="font-semibold text-gray-900">1問あたりの制限時間</h2>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {[0, 15, 30, 60, 90].map((sec) => (
+                <button
+                  key={sec}
+                  onClick={() => setTimeLimitSeconds(sec)}
+                  className={`rounded-lg px-4 py-2 text-sm font-medium transition-all ${
+                    timeLimitSeconds === sec
+                      ? "bg-brand-600 text-white"
+                      : "border border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-100"
+                  }`}
+                >
+                  {sec === 0 ? "なし" : `${sec}秒`}
+                </button>
+              ))}
+            </div>
+            {timeLimitSeconds > 0 && (
+              <p className="mt-2 text-xs text-gray-400">
+                各問題開始から {timeLimitSeconds} 秒で回答を締め切ります
+              </p>
+            )}
+          </div>
+
           <Button
             onClick={handleStart}
             loading={loading}
@@ -329,6 +383,14 @@ export function HostSession({ session, quizzes, categoryName }: HostSessionProps
                 {connected ? "接続済み" : "接続中"}
               </span>
             </div>
+            {hostTimeLeft !== null && !showResult && (
+              <div className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-bold ${
+                hostTimeLeft <= 5 ? "bg-red-500/80 text-white animate-pulse" : "bg-white/10 text-white"
+              }`}>
+                <Timer size={14} />
+                {hostTimeLeft}秒
+              </div>
+            )}
             <span className="text-sm text-white/70">
               問題 {currentIndex + 1} / {quizzes.length}
             </span>
@@ -443,6 +505,7 @@ export function HostSession({ session, quizzes, categoryName }: HostSessionProps
             <Button
               onClick={() => {
                 setShowResult(true);
+                setHostTimeLeft(null);
                 broadcastChannelRef.current?.send({
                   type: "broadcast",
                   event: "answer_revealed",
