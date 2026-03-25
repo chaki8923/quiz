@@ -329,7 +329,7 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
                 onClick={() => !submitted && !answerRevealed && timeLeft !== 0 && setSelectedChoiceId(choice.id)}
                 disabled={submitted || answerRevealed || timeLeft === 0}
                 className={`w-full rounded-xl border-2 p-4 text-left transition-all ${
-                  submitted || answerRevealed
+                  answerRevealed
                     ? isCorrect
                       ? "border-green-400 bg-green-50"
                       : isSelected
@@ -343,7 +343,7 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
                 <div className="flex items-center gap-3">
                   <span
                     className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-sm font-bold ${
-                      submitted || answerRevealed
+                      answerRevealed
                         ? isCorrect
                           ? "bg-green-500 text-white"
                           : isSelected
@@ -357,7 +357,7 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
                     {CHOICE_LABELS[ci]}
                   </span>
                   <span className="flex-1 font-medium text-gray-900">{choice.text}</span>
-                  {(submitted || answerRevealed) && isCorrect && (
+                  {answerRevealed && isCorrect && (
                     <CheckCircle size={20} className="flex-shrink-0 text-green-500" />
                   )}
                 </div>
@@ -381,7 +381,7 @@ export function QuizSession({ session, quizzes, categoryName }: QuizSessionProps
                 )}
 
                 {/* 正解の解説 */}
-                {(submitted || answerRevealed) && isCorrect && choice.explanation && (
+                {answerRevealed && isCorrect && choice.explanation && (
                   <div className="mt-2 ml-11 rounded-lg bg-green-100 px-3 py-2 text-sm text-green-800">
                     💡 {choice.explanation}
                   </div>
